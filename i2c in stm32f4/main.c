@@ -1,60 +1,140 @@
-//
-//  main.c
-//  i2c in stm32f4
-//
-//  Created by Soofiyan Atar on 07/11/18.
-//
-#include <stdio.h>
-#include <stdbool.h>
-#include <stm32f4xx.h>
+#include <__cross_studio_io.h>
+#include "stm32f407xx.h"
+void i2c_init();
+void delay();
 
-bool write = 0, read = 1;
+void send_start();
+void send_stop();
+void send_data(uint8_t data);
+
+void recieve_data(int bytes_no);
+
+
+uint8_t addr = 0x08;
+int data_rec[5]= {0};
+int index = 0;
+
 
 int main()
 {
-    I2C_init();
-    while(1)
-    {
-        I2C_start();
-        I2C_write_address(0x08);
-        I2C_write_data(0x10);
-        I2C_stop();
-    }
+    i2c_init();
+    //led init
+    RCC -> AHB1ENR |= (1<<3);
+    GPIOD ->MODER |= (1<<26);
+    GPIOD -> PUPDR |= (1<<27);
+
+//send 6 and then 5
+//    send_data(6);
+//    delay();
+//    send_data(6);
+//    send_stop();
+
+    int no_bits = 3;
+    recieve_data(no_bits);
+    delay();
+
+    for (int i = 0;i<no_bits;i++)
+      send_data(data_rec[i]);
+    send_stop();
+
+    while(1);
+    return 0;
 }
 
-void I2C_start()
-{
-    I2C1 -> CR1 |= (1<<10);
-    I2C1 -> CR2 |= 0x0008;
-//    I2C -> OAR1 |= (address<<1);            //for slave address like TWAR register in avr
-    I2C1 -> CCR |= (1<<2);
-    I2C1 -> CR1 |= (1<<0);                   //enable peripheral
-    I2C1 -> CR1 |= (1<<8);                   //start condition
-    while(!(I2C1 -> SR1 & (1<<0)));
+void delay(){
+   for(int i =0 ; i<=1000;i++)
+    for(int i =0 ; i<=100;i++);
 }
-void I2C_write_address(uint8_t address)     //address will be max 0x7F
-{
-    //while(!(I2C1 -> SR1 & (1<<7)));
-    I2C1 -> DR |= (address<<1) + write;
-    while(!(I2C1 -> SR1 & (1<<1)));
+
+void i2c_init(){
+    RCC -> AHB1ENR |= (1<<1); //port B clock enable
+    GPIOB ->MODER |= ((1<<13) | (1<<15)); //set port as alternate function
+    GPIOB ->MODER &= ~((1<<12)|(1<<14));
+    GPIOB ->OTYPER |= (1<<6)|(1<<7);
+    GPIOB->PUPDR |= ((1<<12)|(1<<14));
+    GPIOB ->AFR[0] = 0x44000000; //set portB for i2c function
+    RCC -> APB1ENR |= (1<<21); //i2c1 clock enable
+
+
+    I2C1->CR1 |= (1<<10);//ack enable
+    I2C1->CR2 |= (1<<2)|(1<<9)|(1<<10); //8MHz peripheral clock and interrupt enable
+    //100KHz
+    I2C1->CCR = 0x0028;
+    I2C1->TRISE = 0x0009;
+    I2C1->CR1 |= (1<<0);//peripheral enable
+
+
+    for(int i =0 ;i<=1000;i++);  //small delay
 }
-void I2C_write_data(uint8_t data)
-{
-    while(!(I2C1 -> SR1 & (1<<7)));
-    I2C1 -> DR |= data;
+
+
+void send_start(){
+    I2C1->CR1 |= (1<<8); //start condition
+    while(((I2C1->SR1) & (1<<0)) == 0);
 }
-void I2C_stop()
-{
-    I2C1 -> CR1 |= (1<<9);
-    while(!(I2C1 -> SR1 & (1<<4)));
+
+void send_stop(){
+    I2C1->CR1 |= (1<<9); //stop condition
 }
-void I2C_init()
-{
-    RCC -> AHB1ENR |= (1<<1);
-    RCC -> APB1ENR |= (1<<21);
-    RCC -> APB2ENR |= (1<<14);
-    GPIOB -> MODER |= (1<<13)|(1<<15);
-    GPIOB -> OTYPER |= (1<<6)|(1<<7);
-    GPIOB -> OSPEEDR |= (1<<12)|(1<<14);
-    GPIOB -> AFR[0] |= (1<<26)|(1<<30);
+
+void send_data(uint8_t data){
+    send_start();
+    I2C1->DR = (addr<<1); //address transmission
+    while(((I2C1->SR1) & (1<<1)) == 0); //wait for ADDR bit
+    while(((I2C1->SR2) & (1<<2)) == 0); //wait for TRA bit
+    while(((I2C1->SR1) & (1<<7)) == 0); //wait for tx buffer to be empty
+    I2C1->DR = data;
+    while(((I2C1->SR1) & (1<<2)) == 0); //wait for transmission to complete
+}
+
+void recieve_data(int bytes_no){
+    send_start();
+    if (bytes_no == 1){
+        I2C1->DR = (addr<<1)|(1<<0); //address transmission
+        while(((I2C1->SR1) & (1<<1)) == 0); //wait for ADDR bit
+        I2C1->CR1 &= ~(1<<10); //clear ack
+        while(((I2C1->SR1) & (1<<6)) == 0);
+        send_stop();
+        data_rec[index] = I2C1->DR;
+        I2C1->CR1 |= (1<<10);//ack enable
+    }
+
+    else if (bytes_no == 2){
+        I2C1->CR1 &= ~(1<<10); //clear ack
+        I2C1->CR1 |= (1<<11); //set POS
+        I2C1->DR = (addr<<1)|(1<<0); //address transmission
+        while(((I2C1->SR1) & (1<<1)) == 0); //wait for ADDR bit
+        while(((I2C1->SR1) & (1<<2)) == 0); //wait for BTF = 1
+
+        send_stop();
+
+        data_rec[index] = I2C1->DR;
+        index++;
+        data_rec[index] = I2C1->DR;
+
+        I2C1->CR1 |= (1<<10);//ack enable
+    }
+
+    else{
+      I2C1->CR1 |= (1<<10);//ack enable
+      I2C1->DR = (addr<<1)|(1<<0); //address transmission
+      while(((I2C1->SR1) & (1<<1)) == 0); //wait for ADDR bit
+
+      while(bytes_no - 3 > 0){
+        while(((I2C1->SR1) & (1<<6)) == 0); //wait for RxNE = 1
+        data_rec[index] = I2C1->DR;
+        index++;
+        bytes_no--;
+      }
+
+      while(((I2C1->SR1) & (1<<2)) == 0); //wait for BTF = 1
+      I2C1->CR1 &= ~(1<<10); //clear ack
+      data_rec[index] = I2C1->DR;
+      index++;
+      while(((I2C1->SR1) & (1<<2)) == 0); //wait for BTF = 1
+      send_stop();
+      data_rec[index] = I2C1->DR;
+      index++;
+      data_rec[index] = I2C1->DR;
+    }
 }
